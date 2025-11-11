@@ -1,0 +1,29 @@
+# Core dependencies for ControlNet training
+diffusers==0.25.0
+transformers==4.36.0
+accelerate==0.25.0
+torch>=2.0.0
+torchvision>=0.15.0
+
+# ControlNet and conditioning
+controlnet_aux
+xformers
+
+# Data handling
+datasets
+pandas
+Pillow>=9.0.0
+opencv-python
+numpy
+
+# Training utilities
+tensorboard
+tqdm
+
+# Memory optimization
+bitsandbytes  # For 8-bit Adam optimizer
+
+# Additional utilities
+kagglehub  # For downloading Sketchy dataset
+scipy
+
