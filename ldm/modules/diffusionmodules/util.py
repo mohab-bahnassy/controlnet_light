@@ -201,11 +201,15 @@ def mean_flat(tensor):
 
 def normalization(channels):
     """
-    Make a standard normalization layer.
+    Make a standard normalization layer with dynamic group count.
     :param channels: number of input channels.
     :return: an nn.Module for normalization.
     """
-    return GroupNorm32(32, channels)
+    # Calculate dynamic group count that divides channels evenly
+    num_groups = min(32, channels) if channels >= 32 else max(1, channels // 4)
+    while channels % num_groups != 0 and num_groups > 1:
+        num_groups -= 1
+    return GroupNorm32(num_groups, channels)
 
 
 # PyTorch 1.7 has SiLU, but we support PyTorch 1.5.

@@ -21,7 +21,7 @@ from ldm.modules.diffusionmodules.util import (
 )
 
 from ldm.modules.attention import SpatialTransformer
-from ldm.modules.diffusionmodules.openaimodel import TimestepEmbedSequential, ResBlock, Downsample, AttentionBlock
+from ldm.modules.diffusionmodules.openaimodel import TimestepEmbedSequential, ResBlock, Downsample, AttentionBlock, TimestepBlock
 from ldm.util import exists
 
 
@@ -46,7 +46,7 @@ class DepthwiseSeparableConv(nn.Module):
         return x
 
 
-class EfficientResBlock(nn.Module):
+class EfficientResBlock(TimestepBlock):
     """
     ResBlock using depthwise separable convolutions.
     More parameter efficient than standard ResBlock.
@@ -106,7 +106,8 @@ class EfficientResBlock(nn.Module):
         else:
             self.skip_connection = conv_nd(dims, channels, self.out_channels, 1)
 
-    def forward(self, x, emb, context=None):
+    def forward(self, x, emb):
+        """Forward pass matching TimestepBlock signature."""
         h = self.in_layers(x)
         emb_out = self.emb_layers(emb).type(h.dtype)
         while len(emb_out.shape) < len(h.shape):
@@ -183,7 +184,10 @@ class LightControlNet(nn.Module):
         if num_head_channels == -1:
             assert num_heads != -1, 'Either num_heads or num_head_channels has to be set'
 
-        # Apply channel reduction
+        # Store original model_channels for zero_conv outputs
+        self.original_model_channels = model_channels
+        
+        # Apply channel reduction for internal processing
         model_channels = int(model_channels * light_factor)
         
         self.dims = dims
@@ -228,7 +232,8 @@ class LightControlNet(nn.Module):
                 )
             ]
         )
-        self.zero_convs = nn.ModuleList([self.make_zero_conv(model_channels)])
+        # zero_conv outputs should match full model channels
+        self.zero_convs = nn.ModuleList([self.make_zero_conv(model_channels, self.original_model_channels)])
 
         # Lighter hint processing block
         hint_mid_ch = max(16, int(32 * light_factor))
@@ -269,6 +274,7 @@ class LightControlNet(nn.Module):
                     )
                 ]
                 ch = mult * model_channels
+                full_ch = mult * self.original_model_channels  # Full model channels
                 if ds in attention_resolutions:
                     if num_head_channels == -1:
                         dim_head = ch // num_heads
@@ -297,11 +303,12 @@ class LightControlNet(nn.Module):
                             )
                         )
                 self.input_blocks.append(TimestepEmbedSequential(*layers))
-                self.zero_convs.append(self.make_zero_conv(ch))
+                self.zero_convs.append(self.make_zero_conv(ch, full_ch))
                 self._feature_size += ch
                 input_block_chans.append(ch)
             if level != len(channel_mult) - 1:
                 out_ch = ch
+                full_out_ch = mult * self.original_model_channels  # Full model channels
                 self.input_blocks.append(
                     TimestepEmbedSequential(
                         ResBlock(
@@ -322,7 +329,7 @@ class LightControlNet(nn.Module):
                 )
                 ch = out_ch
                 input_block_chans.append(ch)
-                self.zero_convs.append(self.make_zero_conv(ch))
+                self.zero_convs.append(self.make_zero_conv(ch, full_out_ch))
                 ds *= 2
                 self._feature_size += ch
 
@@ -362,11 +369,18 @@ class LightControlNet(nn.Module):
                 use_scale_shift_norm=use_scale_shift_norm,
             ),
         )
-        self.middle_block_out = self.make_zero_conv(ch)
+        full_middle_ch = channel_mult[-1] * self.original_model_channels
+        self.middle_block_out = self.make_zero_conv(ch, full_middle_ch)
         self._feature_size += ch
 
-    def make_zero_conv(self, channels):
-        return TimestepEmbedSequential(zero_module(conv_nd(self.dims, channels, channels, 1, padding=0)))
+    def make_zero_conv(self, in_channels, out_channels=None):
+        """
+        Create zero conv that projects from reduced channels to full model channels.
+        This ensures lightweight models output compatible channel counts.
+        """
+        if out_channels is None:
+            out_channels = in_channels
+        return TimestepEmbedSequential(zero_module(conv_nd(self.dims, in_channels, out_channels, 1, padding=0)))
 
     def forward(self, x, hint, timesteps, context, **kwargs):
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
@@ -477,6 +491,9 @@ class EfficientControlNet(nn.Module):
         if num_head_channels == -1:
             assert num_heads != -1, 'Either num_heads or num_head_channels has to be set'
 
+        # Store original model_channels for zero_conv outputs
+        self.original_model_channels = model_channels
+        
         # Apply slight channel reduction
         model_channels = int(model_channels * channel_reduction)
         
@@ -522,7 +539,8 @@ class EfficientControlNet(nn.Module):
                 )
             ]
         )
-        self.zero_convs = nn.ModuleList([self.make_zero_conv(model_channels)])
+        # zero_conv outputs should match full model channels
+        self.zero_convs = nn.ModuleList([self.make_zero_conv(model_channels, self.original_model_channels)])
 
         # Efficient hint processing with depthwise separable convs
         self.input_hint_block = TimestepEmbedSequential(
@@ -562,6 +580,7 @@ class EfficientControlNet(nn.Module):
                     )
                 ]
                 ch = mult * model_channels
+                full_ch = mult * self.original_model_channels  # Full model channels
                 if ds in attention_resolutions:
                     if num_head_channels == -1:
                         dim_head = ch // num_heads
@@ -590,11 +609,12 @@ class EfficientControlNet(nn.Module):
                             )
                         )
                 self.input_blocks.append(TimestepEmbedSequential(*layers))
-                self.zero_convs.append(self.make_zero_conv(ch))
+                self.zero_convs.append(self.make_zero_conv(ch, full_ch))
                 self._feature_size += ch
                 input_block_chans.append(ch)
             if level != len(channel_mult) - 1:
                 out_ch = ch
+                full_out_ch = mult * self.original_model_channels  # Full model channels
                 self.input_blocks.append(
                     TimestepEmbedSequential(
                         EfficientResBlock(  # Use efficient blocks
@@ -614,7 +634,7 @@ class EfficientControlNet(nn.Module):
                 )
                 ch = out_ch
                 input_block_chans.append(ch)
-                self.zero_convs.append(self.make_zero_conv(ch))
+                self.zero_convs.append(self.make_zero_conv(ch, full_out_ch))
                 ds *= 2
                 self._feature_size += ch
 
@@ -654,11 +674,18 @@ class EfficientControlNet(nn.Module):
                 use_scale_shift_norm=use_scale_shift_norm,
             ),
         )
-        self.middle_block_out = self.make_zero_conv(ch)
+        full_middle_ch = channel_mult[-1] * self.original_model_channels
+        self.middle_block_out = self.make_zero_conv(ch, full_middle_ch)
         self._feature_size += ch
 
-    def make_zero_conv(self, channels):
-        return TimestepEmbedSequential(zero_module(conv_nd(self.dims, channels, channels, 1, padding=0)))
+    def make_zero_conv(self, in_channels, out_channels=None):
+        """
+        Create zero conv that projects from reduced channels to full model channels.
+        This ensures lightweight models output compatible channel counts.
+        """
+        if out_channels is None:
+            out_channels = in_channels
+        return TimestepEmbedSequential(zero_module(conv_nd(self.dims, in_channels, out_channels, 1, padding=0)))
 
     def forward(self, x, hint, timesteps, context, **kwargs):
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
@@ -684,7 +711,7 @@ class EfficientControlNet(nn.Module):
         return outs
 
 
-class SimpleCNNBlock(nn.Module):
+class SimpleCNNBlock(TimestepBlock):
     """
     Simple CNN block without attention mechanisms.
     Uses basic convolutions with skip connections for efficiency.
@@ -739,7 +766,8 @@ class SimpleCNNBlock(nn.Module):
         else:
             self.skip_connection = conv_nd(dims, channels, self.out_channels, 1)
 
-    def forward(self, x, emb, context=None):
+    def forward(self, x, emb):
+        """Forward pass matching TimestepBlock signature."""
         # Simple forward without complex conditioning
         h = self.conv1(x)
         
@@ -799,6 +827,9 @@ class SimpleCNNControlNet(nn.Module):
     ):
         super().__init__()
         
+        # Store original model_channels for zero_conv outputs
+        self.original_model_channels = model_channels
+        
         # Apply channel reduction
         model_channels = int(model_channels * channel_reduction)
         
@@ -834,7 +865,8 @@ class SimpleCNNControlNet(nn.Module):
                 )
             ]
         )
-        self.zero_convs = nn.ModuleList([self.make_zero_conv(model_channels)])
+        # zero_conv outputs should match full model channels
+        self.zero_convs = nn.ModuleList([self.make_zero_conv(model_channels, self.original_model_channels)])
 
         # Simple hint processing - no complex blocks
         self.input_hint_block = TimestepEmbedSequential(
@@ -868,15 +900,17 @@ class SimpleCNNControlNet(nn.Module):
                     )
                 ]
                 ch = mult * model_channels
+                full_ch = mult * self.original_model_channels  # Full model channels
                 # Note: No attention layers added
                 self.input_blocks.append(TimestepEmbedSequential(*layers))
-                self.zero_convs.append(self.make_zero_conv(ch))
+                self.zero_convs.append(self.make_zero_conv(ch, full_ch))
                 self._feature_size += ch
                 input_block_chans.append(ch)
                 
             # Downsample between levels
             if level != len(channel_mult) - 1:
                 out_ch = ch
+                full_out_ch = mult * self.original_model_channels  # Full model channels
                 self.input_blocks.append(
                     TimestepEmbedSequential(
                         Downsample(ch, conv_resample, dims=dims, out_channels=out_ch)
@@ -884,7 +918,7 @@ class SimpleCNNControlNet(nn.Module):
                 )
                 ch = out_ch
                 input_block_chans.append(ch)
-                self.zero_convs.append(self.make_zero_conv(ch))
+                self.zero_convs.append(self.make_zero_conv(ch, full_out_ch))
                 ds *= 2
                 self._feature_size += ch
 
@@ -905,11 +939,18 @@ class SimpleCNNControlNet(nn.Module):
                 use_checkpoint=use_checkpoint,
             ),
         )
-        self.middle_block_out = self.make_zero_conv(ch)
+        full_middle_ch = channel_mult[-1] * self.original_model_channels
+        self.middle_block_out = self.make_zero_conv(ch, full_middle_ch)
         self._feature_size += ch
 
-    def make_zero_conv(self, channels):
-        return TimestepEmbedSequential(zero_module(conv_nd(self.dims, channels, channels, 1, padding=0)))
+    def make_zero_conv(self, in_channels, out_channels=None):
+        """
+        Create zero conv that projects from reduced channels to full model channels.
+        This ensures lightweight models output compatible channel counts.
+        """
+        if out_channels is None:
+            out_channels = in_channels
+        return TimestepEmbedSequential(zero_module(conv_nd(self.dims, in_channels, out_channels, 1, padding=0)))
 
     def forward(self, x, hint, timesteps, context, **kwargs):
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)

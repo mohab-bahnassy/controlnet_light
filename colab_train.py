@@ -1,3 +1,49 @@
+# -*- coding: utf-8 -*-
+"""
+Lightweight ControlNet Training - Colab Orchestration Script with Sketchy Dataset
+
+This script trains ALL 4 LIGHTWEIGHT ControlNet variants sequentially:
+  1. Light ControlNet (50% channels) - Balanced speed/quality
+  2. Tiny ControlNet (25% channels) - Maximum speed
+  3. Efficient ControlNet (Depthwise Separable) - Parameter efficient
+  4. SimpleCNN ControlNet (No Attention) - Ultra efficient
+
+What this script does:
+  1. Downloads the Sketchy Images Dataset from Kaggle
+  2. Uses SKETCH images (not photos) as training input
+  3. Extracts captions from class names
+  4. Trains ALL 4 lightweight ControlNet variants on sketch-to-image generation
+  5. Saves each model to separate subdirectories in Google Drive
+  6. Provides comparison of model parameters and characteristics
+
+Dataset: Sketches → Lightweight ControlNet → Generated Images
+Captions: Automatically generated from class names (e.g., "a sketch of an airplane")
+
+To use:
+1. Upload the entire controlnet_light folder to Google Drive (e.g., /content/drive/MyDrive/controlnet_light/)
+2. Open this script in Google Colab
+3. Change runtime to GPU (Runtime → Change runtime type → GPU)
+4. Modify REPO_PATH and configuration below (especially IMAGES_PER_CLASS, MAX_EPOCHS)
+5. Run the script
+6. Dataset will be automatically downloaded from Kaggle
+7. All 4 models will be trained sequentially and saved to Google Drive
+
+Model Output Structure:
+  /content/drive/MyDrive/AML/controlnet_trained/
+    ├── controlnet_light/       (Light model - recommended default)
+    ├── controlnet_tiny/        (Tiny model - fastest)
+    ├── controlnet_efficient/   (Efficient model - depthwise separable)
+    └── controlnet_simple_cnn/  (SimpleCNN - no attention)
+
+Training Method:
+- Uses PyTorch Lightning (not HuggingFace Diffusers)
+- Based on tutorial_train_light.py approach
+- Each model trained with optimized batch size for its architecture
+
+Note: This uses sketches as input, not photos. The ControlNets will learn to convert
+sketches into realistic images based on the caption descriptions.
+"""
+
 import sys
 import os
 
@@ -32,7 +78,7 @@ print("✓ Google Drive mounted!")
 # os.system("pip install -q torch torchvision numpy")
 
 # # Install MODERN versions that don't have the cached_download issue
-# # diffusers >= 0.27.0 doesn't use cached_download (which was removed from huggingface_hub)
+# # diffusers >= 0.27.0 doesn't use cached_download (which was removed from huggingface_hub) 
 # # CRITICAL: Uninstall old version first, then install latest to avoid cached_download error
 # print("Installing Diffusers and HuggingFace libraries (modern versions)...")
 
@@ -64,12 +110,12 @@ print("✓ Google Drive mounted!")
 #         # Check if version is >= 0.27.0
 #         major, minor = map(int, version.split('.')[:2])
 #         if major > 0 or (major == 0 and minor >= 27):
-#             print("  ✓ Version is compatible (>= 0.27.0)")
-#         else:
-#             print(f"  ⚠ WARNING: Version {version} may still have cached_download issue")
-#             print("  ⚠ Try: Runtime → Restart runtime, then run again")
-# except Exception as e:
-#     print(f"  ⚠ Could not verify version: {e}")
+#             print("  ✓ Version is compatible (>= 0.27.0)
+#             else:
+#                 print(f"  ⚠ WARNING: Version {version} may still have cached_download issue")
+#                 print("  ⚠ Try: Runtime → Restart runtime, then run again")
+#         except Exception as e:
+#             print(f"  ⚠ Could not verify version: {e}")
 
 # # Install ControlNet and image processing dependencies
 # print("Installing ControlNet and image processing libraries...")
@@ -298,7 +344,7 @@ def prepare_sketchy_dataset_from_kaggle(
                     for f in files:
                         print(f'{subindent}{f}')
             raise FileNotFoundError(f"Sketches not found in any expected location within {dataset_path}.")
-
+            
     print(f"✓ Sketches directory for processing: {sketches_root}")
 
     # Create output directories
@@ -445,62 +491,62 @@ class SketchyDataset(Dataset):
         self.dataset_base = dataset_base
         self.resolution = resolution
         self.data = []
-
+        
         # Load captions CSV
         csv_path = os.path.join(dataset_base, "captions.csv")
         print(f"Loading dataset from {csv_path}...")
-
+        
         import pandas as pd
         df = pd.read_csv(csv_path)
-
+        
         for idx, row in df.iterrows():
             self.data.append({
                 'image_filename': row['image_filename'],
                 'caption': row['caption']
             })
-
+        
         print(f"✓ Loaded {len(self.data)} training samples")
-
+    
     def __len__(self):
         return len(self.data)
-
+    
     def __getitem__(self, idx):
         item = self.data[idx]
-
+        
         # Load sketch image
         image_path = os.path.join(self.dataset_base, 'images', item['image_filename'])
         sketch = cv2.imread(image_path)
-
+        
         if sketch is None:
             print(f"Warning: Could not load image {image_path}")
             # Return a blank image if loading fails
             sketch = np.zeros((self.resolution, self.resolution, 3), dtype=np.uint8)
-
+        
         # Convert BGR to RGB
         sketch = cv2.cvtColor(sketch, cv2.COLOR_BGR2RGB)
-
+        
         # Resize to target resolution
         sketch = cv2.resize(sketch, (self.resolution, self.resolution))
-
+        
         # For ControlNet training:
         # - hint: The conditioning input (sketch edges)
         # - jpg: The target output (we'll use the sketch itself as target for now,
         #        or you could generate a realistic version)
-
+        
         # Create edge map as hint (using Canny edge detection)
         gray = cv2.cvtColor(sketch, cv2.COLOR_RGB2GRAY)
         edges = cv2.Canny(gray, 100, 200)
         edges = cv2.cvtColor(edges, cv2.COLOR_GRAY2RGB)
-
+        
         # Normalize hint (edges) to [0, 1]
         hint = edges.astype(np.float32) / 255.0
-
+        
         # Normalize target (sketch) to [-1, 1]
         target = (sketch.astype(np.float32) / 127.5) - 1.0
-
+        
         # Get caption
         prompt = item['caption']
-
+        
         return dict(jpg=target, txt=prompt, hint=hint)
 
 # ============================================================
@@ -513,85 +559,8 @@ print("="*60)
 # Import required modules for PyTorch Lightning training
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader
-
-# --- BEGIN FIX ---
-# Original: from cldm.logger import ImageLogger
-# Original: from pytorch_lightning.utilities.distributed import rank_zero_only
-# Fix: Update cldm/logger.py to import rank_zero_only from its new location in PyTorch Lightning v2.x
-
-# The problematic import is inside cldm/logger.py. We need to modify that file directly.
-# This is a temporary fix by creating a dummy logger to unblock, but the correct fix is to change the file.
-# For now, let's try to patch it or instruct the user to change the file.
-
-# To directly modify the file: Create a new cell and put this:
-# logger_path = os.path.join(REPO_PATH, 'cldm', 'logger.py')
-# with open(logger_path, 'r') as f:
-#     content = f.read()
-# content = content.replace(
-#     'from pytorch_lightning.utilities.distributed import rank_zero_only',
-#     'from pytorch_lightning.utilities.rank_zero import rank_zero_only'
-# )
-# with open(logger_path, 'w') as f:
-#     f.write(content)
-
-# Since I cannot directly modify arbitrary files on the file system from this action,
-# and given the user has provided the full cell's content, I will have to advise
-# them to manually change the file, or create a temporary monkey-patch in this cell.
-# A monkey-patch might be complex and hide the root cause.
-# The user is asking to explain and fix the error, so directly fixing the source file is the best approach.
-# However, my tools don't allow direct file modification of `cldm/logger.py`.
-# I will proceed with creating a temporary workaround, but the user should be aware of the underlying file change needed.
-
-# Instead of modifying the file directly, which is outside the scope of `modify_cells` for an arbitrary file,
-# I will provide a minimal mock for ImageLogger for demonstration purposes.
-# The user should be advised to make the actual change in the `controlnet_light/cldm/logger.py` file.
-
-# Let's import the actual logger first to see if the previous `pip uninstall/install` helped.
-# If it still fails, the problem is in the `cldm/logger.py` file itself.
-# Based on the user's latest error (`ModuleNotFoundError: No module named 'pytorch_lightning.utilities.distributed'`),
-# the problem IS in the `cldm/logger.py` file.
-
-# I'll create a new cell to fix the import in the `cldm/logger.py` file.
-# Since I cannot execute a new cell from here, I will output a direct instruction for the user to fix the file.
-
-# *** For the purpose of providing a `modify_cells` response, I will create a temporary placeholder
-# *** `ImageLogger` class right here, effectively bypassing the problematic import in the original file.
-# *** This is a workaround to unblock the execution, but the user should still be aware of the root cause.
-
+from cldm.logger import ImageLogger
 from cldm.model import create_model, load_state_dict
-
-# Temporary ImageLogger workaround (User should fix cldm/logger.py directly)
-import torch
-from pytorch_lightning.callbacks import Callback
-from pytorch_lightning.utilities.rank_zero import rank_zero_only # Corrected import path
-from torchvision.utils import make_grid
-
-class ImageLogger(Callback):
-    def __init__(self, batch_frequency, max_images_per_batch=4):
-        super().__init__()
-        self.batch_frequency = batch_frequency
-        self.max_images_per_batch = max_images_per_batch
-
-    @rank_zero_only
-    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
-        if batch_idx % self.batch_frequency == 0:
-            with torch.no_grad():
-                # Ensure batch['jpg'] is a tensor
-                image_tensor = batch['jpg']
-                # Denormalize if necessary (assuming it's normalized to [-1, 1])
-                image_tensor = (image_tensor + 1.0) / 2.0  # From [-1, 1] to [0, 1]
-
-                grid = make_grid(image_tensor[:self.max_images_per_batch], nrow=self.max_images_per_batch)
-                trainer.logger.experiment.add_image(f'train/input_images', grid, global_step=trainer.global_step)
-
-                # Placeholder for generated images if we had them
-                # generated_images = pl_module.log_images(batch, N=self.max_images_per_batch)
-                # if generated_images:
-                #     grid_gen = make_grid(generated_images, nrow=self.max_images_per_batch)
-                #     trainer.logger.experiment.add_image(f'train/generated_images', grid_gen, global_step=trainer.global_step)
-
-# --- END FIX ---
-
 
 # Dictionary to store all trained model paths
 TRAINED_MODEL_PATHS = {}
@@ -602,32 +571,32 @@ for model_key, model_info in LIGHTWEIGHT_MODELS.items():
     print(f"TRAINING MODEL: {model_key.upper()}")
     print(f"Description: {model_info['description']}")
     print("="*60)
-
+    
     config_path = model_info['config_path']
     model_output_dir = os.path.join(BASE_OUTPUT_DIR, model_info['output_subdir'])
     batch_size = BATCH_SIZES[model_key]
-
+    
     # Verify config file exists
     if not os.path.exists(config_path):
         print(f"⚠ WARNING: Config file not found: {config_path}")
         print(f"Skipping {model_key} model...")
         continue
-
+    
     print(f"\nConfiguration:")
     print(f"  Config: {config_path}")
     print(f"  Output: {model_output_dir}")
     print(f"  Batch size: {batch_size}")
     print(f"  Learning rate: {LEARNING_RATE}")
     print(f"  Max epochs: {MAX_EPOCHS}")
-
+    
     try:
         # Create output directory
         os.makedirs(model_output_dir, exist_ok=True)
-
+        
         # Load model (CPU first, PyTorch Lightning will move to GPU)
         print(f"\n[{model_key}] Loading model...")
         model = create_model(config_path).cpu()
-
+        
         # Load initial weights if resume path exists
         if os.path.exists(RESUME_PATH):
             print(f"[{model_key}] Loading initial weights from {RESUME_PATH}")
@@ -635,54 +604,53 @@ for model_key, model_info in LIGHTWEIGHT_MODELS.items():
         else:
             print(f"⚠ WARNING: Resume checkpoint not found at {RESUME_PATH}")
             print(f"Training from scratch (not recommended)")
-
+        
         # Set training parameters
         model.learning_rate = LEARNING_RATE
         model.sd_locked = SD_LOCKED
         model.only_mid_control = ONLY_MID_CONTROL
-
+        
         # Count and display parameters
         control_params = sum(p.numel() for p in model.control_model.parameters())
         total_params = sum(p.numel() for p in model.parameters())
         print(f"[{model_key}] Control model parameters: {control_params:,}")
         print(f"[{model_key}] Total parameters: {total_params:,}")
-
+        
         # Prepare dataset and dataloader
         print(f"[{model_key}] Preparing dataset...")
         dataset = SketchyDataset(dataset_base=DATASET_BASE, resolution=512)
         dataloader = DataLoader(
-            dataset,
-            num_workers=0,
-            batch_size=batch_size,
+            dataset, 
+            num_workers=0, 
+            batch_size=batch_size, 
             shuffle=True
         )
-
+        
         # Setup logger
         logger = ImageLogger(batch_frequency=LOGGER_FREQ)
-
+        
         # Setup trainer
         print(f"[{model_key}] Setting up trainer...")
         trainer = pl.Trainer(
-            accelerator="gpu",
-            devices=1,
+            gpus=1,
             precision=32,
             callbacks=[logger],
             max_epochs=MAX_EPOCHS,
             default_root_dir=model_output_dir
         )
-
+        
         # Start training
         print(f"\n[{model_key}] Starting training...")
         print(f"This will take a while. Progress will be displayed below.")
         print("-"*60)
-
+        
         trainer.fit(model, dataloader)
-
+        
         # Save final model
         final_model_path = os.path.join(model_output_dir, f"{model_key}_final.ckpt")
         print(f"\n[{model_key}] Saving final model to {final_model_path}")
         trainer.save_checkpoint(final_model_path)
-
+        
         # Store the path
         TRAINED_MODEL_PATHS[model_key] = {
             'path': final_model_path,
@@ -690,16 +658,16 @@ for model_key, model_info in LIGHTWEIGHT_MODELS.items():
             'parameters': control_params,
             'batch_size': batch_size
         }
-
+        
         print(f"\n✓ [{model_key}] Training complete!")
         print(f"  Model saved to: {final_model_path}")
 
-    except KeyboardInterrupt:
+except KeyboardInterrupt:
         print(f"\n⚠ [{model_key}] Training interrupted by user")
         print(f"Moving to next model...")
         continue
 
-    except Exception as e:
+except Exception as e:
         print(f"\n❌ [{model_key}] Error during training: {e}")
         import traceback
         traceback.print_exc()
@@ -738,7 +706,7 @@ print("="*60)
 if len(TRAINED_MODEL_PATHS) > 0:
     print("\nYou have trained the following lightweight models:")
     print("\nTo test any model, use PyTorch Lightning to load and run inference:")
-    print("\n```python")
+print("\n```python")
     print("import torch")
     print("from cldm.model import create_model, load_state_dict")
     print("from PIL import Image")
@@ -762,14 +730,14 @@ if len(TRAINED_MODEL_PATHS) > 0:
     print("model.load_state_dict(load_state_dict(model_path, location='cpu'))")
     print("model.eval()")
     print("model = model.cuda()  # Move to GPU")
-    print("")
+print("")
     print("# Load your sketch")
     print("sketch = Image.open('path/to/your_sketch.jpg').convert('RGB')")
     print("sketch = sketch.resize((512, 512))")
-    print("")
+print("")
     print("# Run inference")
     print("# (Add your inference code here)")
-    print("```")
+print("```")
     print("\n" + "="*60)
     print("COMPARISON GUIDE")
     print("="*60)
@@ -786,7 +754,7 @@ if len(TRAINED_MODEL_PATHS) > 0:
             print("  Best for: Good efficiency with depthwise separable convolutions")
         elif model_key == 'simple_cnn':
             print("  Best for: Maximum efficiency, simple control tasks")
-
+    
     print("\n" + "="*60)
     print("SAVED MODEL SUMMARY")
     print("="*60)
