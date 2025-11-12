@@ -1,7 +1,9 @@
 # Core dependencies for ControlNet training
-diffusers==0.25.0
-transformers==4.36.0
-accelerate==0.25.0
+# Using latest versions to avoid cached_download import error
+diffusers>=0.27.0
+transformers>=4.40.0
+accelerate>=0.27.0
+huggingface_hub>=0.20.0
 torch>=2.0.0
 torchvision>=0.15.0
 

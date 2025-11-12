@@ -371,9 +371,25 @@ def train(config):
     print("Loading models...")
     
     # Load noise scheduler
-    noise_scheduler = DDPMScheduler.from_pretrained(
-        config.pretrained_model_name, subfolder="scheduler"
-    )
+    # Create scheduler directly to avoid compatibility issues with different diffusers versions
+    try:
+        noise_scheduler = DDPMScheduler.from_pretrained(
+            config.pretrained_model_name, subfolder="scheduler"
+        )
+    except (RuntimeError, ModuleNotFoundError) as e:
+        # Fallback: create scheduler with default SD 1.5 parameters
+        print(f"Warning: Could not load scheduler from pretrained ({e})")
+        print("Creating scheduler with default Stable Diffusion 1.5 parameters...")
+        noise_scheduler = DDPMScheduler(
+            beta_start=0.00085,
+            beta_end=0.012,
+            beta_schedule="scaled_linear",
+            num_train_timesteps=1000,
+            clip_sample=False,
+            set_alpha_to_one=False,
+            steps_offset=1,
+            prediction_type="epsilon"
+        )
     
     # Load tokenizer
     tokenizer = CLIPTokenizer.from_pretrained(

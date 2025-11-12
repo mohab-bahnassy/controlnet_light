@@ -69,8 +69,13 @@ class EfficientResBlock(nn.Module):
         self.use_checkpoint = use_checkpoint
         self.use_scale_shift_norm = use_scale_shift_norm
 
+        # Use dynamic group count that divides channels evenly
+        num_groups = min(32, channels) if channels >= 32 else max(1, channels // 4)
+        while channels % num_groups != 0 and num_groups > 1:
+            num_groups -= 1
+        
         self.in_layers = nn.Sequential(
-            nn.GroupNorm(32, channels),
+            nn.GroupNorm(num_groups, channels),
             nn.SiLU(),
             DepthwiseSeparableConv(channels, self.out_channels, dims=dims),
         )
@@ -82,8 +87,13 @@ class EfficientResBlock(nn.Module):
                 2 * self.out_channels if use_scale_shift_norm else self.out_channels,
             ),
         )
+        # Use dynamic group count for out_channels
+        out_num_groups = min(32, self.out_channels) if self.out_channels >= 32 else max(1, self.out_channels // 4)
+        while self.out_channels % out_num_groups != 0 and out_num_groups > 1:
+            out_num_groups -= 1
+        
         self.out_layers = nn.Sequential(
-            nn.GroupNorm(32, self.out_channels),
+            nn.GroupNorm(out_num_groups, self.out_channels),
             nn.SiLU(),
             nn.Dropout(p=dropout),
             zero_module(
@@ -696,9 +706,14 @@ class SimpleCNNBlock(nn.Module):
         self.use_checkpoint = use_checkpoint
 
         # Simple conv layers without heavy normalization
+        # Use dynamic group count
+        num_groups1 = min(8, self.out_channels) if self.out_channels >= 8 else max(1, self.out_channels // 2)
+        while self.out_channels % num_groups1 != 0 and num_groups1 > 1:
+            num_groups1 -= 1
+        
         self.conv1 = nn.Sequential(
             conv_nd(dims, channels, self.out_channels, 3, padding=1),
-            nn.GroupNorm(8, self.out_channels),
+            nn.GroupNorm(num_groups1, self.out_channels),
             nn.SiLU(),
         )
         
@@ -707,10 +722,15 @@ class SimpleCNNBlock(nn.Module):
             linear(emb_channels, self.out_channels),
         )
         
+        # Use dynamic group count for conv2
+        num_groups2 = min(8, self.out_channels) if self.out_channels >= 8 else max(1, self.out_channels // 2)
+        while self.out_channels % num_groups2 != 0 and num_groups2 > 1:
+            num_groups2 -= 1
+        
         self.conv2 = nn.Sequential(
             nn.Dropout(p=dropout),
             conv_nd(dims, self.out_channels, self.out_channels, 3, padding=1),
-            nn.GroupNorm(8, self.out_channels),
+            nn.GroupNorm(num_groups2, self.out_channels),
             nn.SiLU(),
         )
 
