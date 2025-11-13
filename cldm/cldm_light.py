@@ -421,7 +421,7 @@ class TinyControlNet(LightControlNet):
     def __init__(self, *args, **kwargs):
         # Override defaults for tiny variant
         kwargs['light_factor'] = 0.25
-        
+        kwargs['image_size'] = 64
         # Reduce number of blocks if not specified
         if 'num_res_blocks' not in kwargs:
             kwargs['num_res_blocks'] = 1  # Reduce from 2 to 1 per level
