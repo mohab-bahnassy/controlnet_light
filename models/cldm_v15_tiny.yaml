@@ -21,7 +21,7 @@ model:
     control_stage_config:
       target: cldm.cldm_light.TinyControlNet
       params:
-        image_size: 64 # unused
+        image_size: 32 # unused
         in_channels: 4
         hint_channels: 3
         model_channels: 320  # Will be reduced to 80 internally (25%)
